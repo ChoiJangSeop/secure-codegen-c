@@ -1,6 +1,10 @@
 # set-up for Lora fine-tuning
 import json
 import torch
+import argparse
+import deepspeed
+
+from torch.utils.data import DataLoader, TensorDataset 
 from datasets import load_dataset
 from transformers import (
     AutoTokenizer, 
@@ -42,28 +46,34 @@ peft_config = LoraConfig(
 model = get_peft_model(model, peft_config)
 model.print_trainable_parameters()
 
-# train configuration
+# train configuration (with DeepSpeed)
+tokenized.set_format('torch')
+input_ids = tokenized['input_ids']
+labels = tokenized['input_ids']
 
-data_collator = DataCollatorWithPadding(tokenizer=tokenizer)
+dataset = TensorDataset(input_ids, labels)
+data_loader = DataLoader(dataset, batch_size=8)
 
-training_args = TrainingArguments(
-    output_dir="./result",
-    per_device_train_batch_size=1,
-    per_device_eval_batch_size=1,
-    gradient_accumulation_steps=1
+parser = argparse.ArgumentParser(description="traing scripts")
+parser.add_argument('--local-rank', type=int, default=-1, help='local rank passed from distributed launcher')
+
+parser = deepspeed.add_config_arguments(parser)
+cmd_args = parser.parse_args()
+
+model_engine, optimizer, _, _ = deepspeed.initialize(
+    args=cmd_args,
+    model=model,
+    model_parameters=model.parameters(),
+    training_data=tokenized
 )
 
+for step, batch in enumerate(data_loader):
+    #forward() method
+    loss = model_engine(batch)
 
+    #runs backpropagation
+    model_engine.backward(loss)
 
-trainer = Trainer(
-    model,
-    training_args,
-    train_dataset=tokenized,
-    data_collator=data_collator
-)
-
-with torch.autocast("cuda"):
-    trainer.train()
-
-
-
+    #weight update
+    model_engine.step()
+    
