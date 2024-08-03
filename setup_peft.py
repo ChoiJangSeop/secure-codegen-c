@@ -15,13 +15,9 @@ from peft import get_peft_model, LoraConfig, TaskType
 model_path = "DDIDU/ETRI_CodeLLaMA_7B_CPP"
 dataset_path = "./c_fixes.json"
 
-# with open(dataset_path, 'r') as file:
-#     c_fixes_json = json.load(file)
-
 dataset = load_dataset("json", data_files="./c_fixes.json", split="train")
 
-device_map = {"": torch.cuda.current_device()}
-model = AutoModelForCausalLM.from_pretrained(model_path, device_map=device_map, trust_remote_code=True)
+model = AutoModelForCausalLM.from_pretrained(model_path, trust_remote_code=True)
 tokenizer = AutoTokenizer.from_pretrained(model_path)
 tokenizer.pad_token = tokenizer.eos_token
 
@@ -29,7 +25,7 @@ def tokenize_funtion(examples):
     return tokenizer(examples['content'], max_length=512, padding="max_length", truncation=True)
 
 tokenized = dataset.map(tokenize_funtion, batched=True)
-# tokenized['label'] = tokenized['input_ids']
+print(tokenized.column_names)
 
 peft_config = LoraConfig(
     task_type=TaskType.CAUSAL_LM, 
@@ -50,10 +46,13 @@ training_args = TrainingArguments(
     output_dir="./result",
     per_device_train_batch_size=1,
     per_device_eval_batch_size=1,
-    gradient_accumulation_steps=1
+    gradient_accumulation_steps=1,
+    logging_dir='./logs',  # Optional: logs directory
+    logging_steps=10,      # Optional: log every N steps
+    evaluation_strategy="epoch",  # Optional: evaluation strategy
+    save_strategy="epoch",  # Optional: save model every epoch
+    deepspeed="ds_falcon_180b_z3.json"  # DeepSpeed 설정 파일
 )
-
-
 
 trainer = Trainer(
     model,
@@ -62,8 +61,7 @@ trainer = Trainer(
     data_collator=data_collator
 )
 
-with torch.autocast("cuda"):
-    trainer.train()
+trainer.train()
 
 
 
