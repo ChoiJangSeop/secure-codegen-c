@@ -3,9 +3,10 @@ import json
 import torch
 import argparse
 import deepspeed
+from deepspeed import get_accelerator
 
 from torch.utils.data import DataLoader, TensorDataset 
-from datasets import load_dataset
+from datasets import load_dataset, Dataset
 from transformers import (
     AutoTokenizer, 
     AutoModelForCausalLM, 
@@ -15,6 +16,16 @@ from transformers import (
 )
 
 from peft import get_peft_model, LoraConfig, TaskType
+
+class CustomDataset(Dataset):
+    def __init__(self, data, targets):
+        self.data = data
+        self.targets = targets
+        
+    def __len__(self):
+        return len(self.data)
+    def __getitem__(self, idx):
+        return self.data[idx], self.targets[idx]
 
 model_path = "DDIDU/ETRI_CodeLLaMA_7B_CPP"
 dataset_path = "./c_fixes.json"
@@ -47,25 +58,32 @@ model = get_peft_model(model, peft_config)
 model.print_trainable_parameters()
 
 # train configuration (with DeepSpeed)
-tokenized.set_format('torch')
-input_ids = tokenized['input_ids']
-labels = tokenized['input_ids']
 
-dataset = TensorDataset(input_ids, labels)
-data_loader = DataLoader(dataset, batch_size=8)
+ds_dataset = CustomDataset(tokenized['input_ids'], tokenized['input_ids'])
+data_loader = DataLoader(ds_dataset)
 
-parser = argparse.ArgumentParser(description="traing scripts")
-parser.add_argument('--local-rank', type=int, default=-1, help='local rank passed from distributed launcher')
-
-parser = deepspeed.add_config_arguments(parser)
-cmd_args = parser.parse_args()
+ds_config = {
+    "optimizer": {
+        "type": "Adam",
+        "params": {"lr": 0.001}
+    },
+    "zero": {
+        "stage": 3,
+        "offload_optimizer": {
+            "device": "[cpu|nvme]"
+        },
+        "offload_param": {
+            "device": "[cpu|nvme]"
+        }
+    }
+}
 
 model_engine, optimizer, _, _ = deepspeed.initialize(
-    args=cmd_args,
     model=model,
-    model_parameters=model.parameters(),
-    training_data=tokenized
+    training_data=ds_dataset,
+    config=ds_config
 )
+
 
 for step, batch in enumerate(data_loader):
     #forward() method
